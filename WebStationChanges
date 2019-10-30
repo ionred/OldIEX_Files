@@ -1,0 +1,107 @@
+DECLARE @rangestartdate as date
+SET @rangestartdate = '2017-02-01'
+SELECT
+V_AGENT.name_ AS Agent, 
+r_entity.C_ID  as MU,
+ISNULL((p1.C_LNAME + ', ' + p1.C_FNAME), case r_schedchgrqst.C_STATUS when 'P' then null when 'X' then null else 'AUTO-APPROVED' end) AS ApproveDeniedBy, 
+ISNULL((p2.C_LNAME + ', ' + p2.C_FNAME),'AGENT') AS RequestedBy,
+(p3.C_LNAME + ', ' + p3.C_FNAME) AS ModifiedBy,
+convert(smalldatetime, switchoffset(r_schedchgrqst.C_CTIME, '-05:00')) AS CreateDate, 
+convert(smalldatetime, switchoffset(r_schedchgrqst.C_MOD, '-05:00')) AS LastModifiedDate, 
+CASE r_schedchgrqst.C_STATUS 
+	WHEN 'C' THEN 'Complete' 
+	WHEN 'X' THEN 'Cancelled' 
+	WHEN 'D' THEN 'Denied' 
+	WHEN 'P' THEN 'Pending' 
+	WHEN 'F' THEN 'Failed'
+	WHEN 'A' THEN 'Failed/Locked'
+	ELSE r_schedchgrqst.C_STATUS 
+END AS STATUS, 
+CASE r_schedchgrqst.C_TYPE 
+	WHEN 'E' THEN 'Edit' 
+	WHEN 'A' THEN 'Add' 
+	WHEN 'D' THEN 'Delete' 
+	ELSE r_schedchgrqst.C_TYPE 
+END AS ExcType,
+r_excp.C_NAME AS Exception,
+convert(smalldatetime, switchoffset(r_schedchgrqst.C_STIME, '-05:00')) AS StartTime,
+convert(smalldatetime, switchoffset(r_schedchgrqst.C_ETIME, '-05:00')) AS EndTime,
+convert(smalldatetime, switchoffset(r_schedchgrqst.C_ORIGSTIME, '-05:00')) AS OrigStart,
+convert(smalldatetime, switchoffset(r_schedchgrqst.C_ORIGETIME, '-05:00')) AS OrigEnd,
+r_schedchgrqst.C_COMMENT AS COMMENT,
+r_schedchgrqst.C_EXCPNOTE AS ActivityNote, 
+CASE r_schedchgrqst.C_ERRORCODE 
+	WHEN 0 THEN ''
+	WHEN 1 THEN 'Priority of requested code below that already on the schedule. The change was not applied for any part of the specified time range because of existing, higher-priority activities.'
+	WHEN 2 THEN 'The date of the request is outside of the MU generated schedule date range'
+	WHEN 3 THEN 'The date of the request is outside of the customer schedule edit range'
+	WHEN 4 THEN 'Invalid request'
+	WHEN 5 THEN 'An internal error occurred'
+	WHEN 6 THEN 'Change request would extend the schedule over 24 hours.'
+	WHEN 7 THEN 'The change was not applied because the activity has been modified or deleted by another user since the time the request was made.'
+	WHEN 8 THEN 'Agent deleted'
+	WHEN 9 THEN 'Schedule changes not allowed because change requests are not configured for the MU'
+	WHEN 10 THEN 'Schedule locked'
+	WHEN 11 THEN 'Code past days'
+	WHEN 12 THEN 'Code future days'
+	WHEN 13 THEN 'Code in current day future times'
+	WHEN 14 THEN 'Code in current day past times'
+	WHEN 15 THEN 'Invalid status transition'
+	WHEN 16 THEN 'The date of the request is outside of the schedule viewer range'
+	WHEN 17 THEN 'The date of the request does not have enough allotments for the time off group'
+	WHEN 18 THEN 'The date of the request does not have allotments for the time off group when requested through NICE Supervisor WebStation'
+	WHEN 19 THEN 'The date of the request does not have enough allotments for the agent'
+	WHEN 20 THEN 'The date of the request does not have allotments for the agent when requested through NICE Supervisor WebStation'
+	WHEN 21 THEN 'The date of the request does not have a role configured for the supervisor'
+	WHEN 22 THEN 'The date of the request does not have an MU configured for the agent'
+	WHEN 23 THEN 'The activity of the request does not have activity in MU configuration for the agent'
+	WHEN 24 THEN 'The request would extend a schedule activity, which is not allowed'
+	WHEN 25 THEN 'The request would shorten a schedule activity, which is not allowed'
+	WHEN 26 THEN 'The request would move a schedule activity, which is not allowed'
+	WHEN 27 THEN 'The request would delete a schedule activity, which is not allowed'
+	WHEN 28 THEN 'The request would add a schedule activity, which is not allowed'
+	WHEN 29 THEN 'The request would overwrite the base code, which is not allowed'
+	WHEN 30 THEN 'The request would extend the schedule, which is not allowed. The requested interval is outside of the schedule.'
+	WHEN 31 THEN 'The request would extend the schedule, which is not allowed. The requested interval overlaps gap of the split schedule.'
+	WHEN 32 THEN 'Supervisor does not have a primary role assigned'
+	WHEN 33 THEN 'Supervisor does not have a primary role assigned'
+	WHEN 34 THEN 'The request in the NICE WebStation is not allowed for the MU'
+	WHEN 35 THEN 'Extend schedule is not allowed for the MU'
+	WHEN 36 THEN 'Agent data values assigned to the agent dont meet the agent data values requirement for the time board slot'
+	WHEN 37 THEN 'Supervisor deleted the time board slots'
+	WHEN 38 THEN 'The schedule change request has been placed into a pending status because there are no slots available for the requested time range'
+	WHEN 39 THEN 'The schedule change request was denied because there are no slots available for the requested time range'
+	WHEN 40 THEN 'Time board slots unavailable due to interval overlap'
+	WHEN 41 THEN 'Agent’s skills dont meet the skills requirement for the time board slot'
+	WHEN 42 THEN 'Agent work rule validation failure: Availability'
+	WHEN 43 THEN 'Agent work rule validation failure: Maximum consecutive work days'
+	WHEN 44 THEN 'Agent work rule validation failure: Schedule length'
+	WHEN 45 THEN 'Agent work rule validation failure: Maximum weekly work hours'
+	WHEN 46 THEN 'Agent work rule validation failure: Minimum weekly work hours'
+	WHEN 47 THEN 'Agent work rule validation failure: Minimum time between schedules'
+	WHEN 48 THEN 'Agent work rule validation failure: Minimum rest period per week'
+	WHEN 49 THEN 'Agent work rule validation failure: Minimum days off'
+	WHEN 50 THEN 'Agent work rule validation failure: Maxium average weekly work hours'
+	WHEN 100 THEN 'Activity was not applied to the entire time range requested'
+	ELSE 'Error Unknown' 
+END AS Error
+
+FROM r_schedchgrqst
+LEFT JOIN V_AGENT ON V_AGENT.agentOid_ = r_schedchgrqst.C_AGT
+LEFT JOIN r_user u1 ON u1.C_OID = r_schedchgrqst.C_APPROVEDBY
+LEFT JOIN r_person p1 ON p1.C_OID = u1.C_PERSON
+LEFT JOIN r_user u2 ON u2.C_OID = r_schedchgrqst.C_SUPVCREATOR
+LEFT JOIN r_person p2 ON p2.C_OID = u2.C_PERSON
+LEFT JOIN r_user u3 ON u3.C_OID = r_schedchgrqst.C_MODBY
+LEFT JOIN r_person p3 ON p3.C_OID = u3.C_PERSON
+LEFT JOIN r_excp ON r_excp.C_OID = r_schedchgrqst.C_EXCP
+LEFT JOIN r_muroster on r_muroster.C_AGT = r_schedchgrqst.C_AGT
+LEFT JOIN r_entity ON r_entity.c_oid=r_muroster.c_mu	AND r_entity.c_act = 'A'
+WHERE r_muroster.C_SDATE <= r_schedchgrqst.C_STIME and (r_muroster.C_EDATE is null  or r_muroster.C_EDATE >= r_schedchgrqst.C_STIME )
+
+AND r_schedchgrqst.C_ACT IS NOT NULL AND r_schedchgrqst.C_ACT = 'A'
+AND r_entity.C_ID not in (5, 6, 51, 100, 372)
+AND CAST(r_schedchgrqst.C_CTIME AS DATE) > @rangestartdate
+
+ORDER BY 
+case ISNULL((p2.C_LNAME + ', ' + p2.C_FNAME),'zzz') when 'zzz' then 'zzz' else 'aaa' end, MU, Agent, CreateDate

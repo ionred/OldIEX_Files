@@ -1,0 +1,25 @@
+SELECT
+		r_agtschedact.c_mod AS modify_,
+		r_agtschedact.c_date AS sched_date_,
+		r_entity.c_id AS mu_,
+		r_agt.c_id AS agent_,
+		r_agtschedact.c_armid AS schedARMid_,
+		r_agtschedact.c_stime AS startTime_,
+		r_entity.c_tz AS timeZone, DATEDIFF(n, r_agtschedact.c_stime, r_agtschedact.c_etime) AS length_,
+		hdrexcp.c_legid AS excode_,
+		hdrexcp.C_NAME AS excName_, COALESCE(r_agtscheddtlact.c_stime, r_agtschedact.c_stime) AS dtlStartMinute_,
+		(DATEDIFF(n, COALESCE(r_agtscheddtlact.c_stime, r_agtschedact.c_stime), COALESCE(r_agtscheddtlact.c_etime, r_agtschedact.c_etime))) AS dtlLength_, 
+			COALESCE(dtlexcp.c_legid, hdrexcp.c_legid) AS dtlExcode_, COALESCE(dtlexcp.C_NAME, hdrexcp.C_NAME) AS dtlExName_,
+		r_agtschedact.c_oid AS agtschedoid
+FROM r_agtschedact
+INNER JOIN r_muroster mur ON mur.c_act = 'A' AND mur.c_agt = r_agtschedact.c_agt AND r_agtschedact.c_date BETWEEN
+			mur.c_sdate AND COALESCE(mur.c_edate, '2038-01-01')
+INNER JOIN r_entity ON r_entity.c_act = 'A' AND r_entity.c_oid = mur.c_mu
+INNER JOIN r_agt ON r_agt.c_act = 'A' AND r_agt.c_oid = r_agtschedact.c_agt
+INNER JOIN r_excp hdrexcp ON hdrexcp.c_oid = r_agtschedact.c_excp
+LEFT OUTER JOIN r_agtscheddtlact ON r_agtschedact.c_oid = r_agtscheddtlact.c_agtsched
+LEFT OUTER JOIN r_excp dtlexcp ON dtlexcp.c_oid = r_agtscheddtlact.c_excp
+LEFT OUTER JOIN r_skill ON r_skill.c_oid = r_agtschedact.c_skill
+LEFT OUTER JOIN r_dailytmplt ON r_dailytmplt.c_oid = r_agtschedact.c_tmplt
+WHERE r_agtschedact.C_MOD > dateadd(s, -900, getutcdate())
+	;

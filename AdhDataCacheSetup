@@ -1,0 +1,38 @@
+USE [nice_wfm_customer1]
+GO
+
+
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[u_AdherenceDataCache](
+	[Payroll] [int] NULL,
+	[AgtName] [varchar](255) NULL,
+	[MgrName] [varchar](255) NULL,
+	[MUID] [int] NULL,
+	[MUName] [varchar](255) NULL,
+	[StartTime] [datetime] NULL,
+	[EndTime] [datetime] NULL,
+	[Schedule] [varchar](255) NULL,
+	[AdhTo] [varchar](255) NULL,
+	[Activity] [varchar](255) NULL,
+	[ActAdh] [varchar](255) NULL,
+	[InAdherence] [varchar](255) NULL,
+	[Exclusion] [varchar](255) NULL,
+	[Mins] [int] NULL,
+	[SchedMins] [int] NULL,
+	[DataTimestamp] [datetime] NULL,
+	[LunchOffPhone] [varchar](10) NULL,
+	[AEOverWrite] [varchar](255) NULL,
+	[AdhDate] [datetime] NULL,
+	[AOID] [nchar](255) NULL
+) ON [PRIMARY]
+GO
+
+ALTER TABLE [dbo].[u_AdherenceDataCache] ADD  CONSTRAINT [DF_u_AdherenceDataCache_DataTimestamp]  DEFAULT (getdate()) FOR [DataTimestamp]
+GO
+
+

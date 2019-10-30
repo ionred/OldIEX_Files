@@ -1,0 +1,20 @@
+SELECT
+r_agt.c_id AS agent_,
+dbo.f_tv4name(r_person.c_lname,r_person.c_fname,r_person.c_suffix) AS name_,
+r_entity.c_id AS mu_,
+r_schedpatset.c_legid AS patternSet_,
+r_wklyschedpat.c_patid AS patternID_,
+r_agtpatbid.c_patrank AS patternRank_,
+COALESCE(r_agt.c_rank,-1) AS rank_,
+r_schedpatset.C_NAME AS patternName_
+
+FROM
+r_agtpatbid
+INNER JOIN r_agt ON r_agt.c_oid=r_agtpatbid.c_agt
+INNER JOIN r_wklyschedpat ON r_wklyschedpat.c_oid=r_agtpatbid.c_wklypat
+INNER JOIN r_schedpatset ON r_schedpatset.c_oid=r_wklyschedpat.c_patset
+INNER JOIN r_entity ON r_entity.c_oid=r_schedpatset.c_mu and r_entity.c_act = 'A'
+INNER JOIN r_person ON r_agt.c_person=r_person.c_oid AND r_agt.c_act='A'
+
+WHERE r_entity.c_id in (6111)  and r_schedpatset.C_NAME LIKE 'AAA%'
+order by COALESCE(r_agt.c_rank,-1), r_agtpatbid.c_patrank

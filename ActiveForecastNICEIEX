@@ -1,0 +1,358 @@
+declare @DATEVAR_01 as datetime
+declare @DATEVAR_03 as datetime
+set @DATEVAR_01 = '2019-03-30'
+set @DATEVAR_03 = '2019-04-12'
+select
+	SYSDATETIMEOFFSET()
+;
+
+SELECT DISTINCT
+	CAST(CONVERT(datetime,SWITCHOFFSET(CONVERT(datetimeoffset,p1.C_FCSTPRD),DATENAME(TzOffset, SYSDATETIMEOFFSET()))) AS datetimeoffset)     AS aINFO_DATE
+	,CAST(CONVERT(datetime,SWITCHOFFSET(CONVERT(datetimeoffset,p1.C_FCSTPRD),DATENAME(TzOffset, SYSDATETIMEOFFSET()))) AS date)     AS INFO_DATE
+  , e4.C_ID                                                                                                                        AS IEX_CT_ID
+  , CAST(CONVERT(datetime,SWITCHOFFSET(CONVERT(datetimeoffset,p1.C_FCSTPRD),DATENAME(TzOffset, SYSDATETIMEOFFSET()))) AS datetime) AS C_FCSTPRD_EST
+  , SUM(p1.C_REVCONT)                                                                                                              AS STF_NCO
+  ,
+	(
+		CASE
+			WHEN SUM(p1.C_REVCONT)= 0
+				THEN 0
+				ELSE CAST(CONVERT(numeric (32,8),(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,1,4))*86400)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,6,2))*3600)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,9,2))*60)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,12,2)))+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,15,3))/1000)) AS numeric (32,8))
+		END
+	)
+	AS STF_AHT
+  , CAST
+		(
+				(
+					CASE
+						WHEN SUM(p1.C_REVCONT)= 0
+							THEN 0
+							ELSE (CAST(CONVERT(numeric (32,8),(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,1,4))*86400)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,6,2))*3600)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,9,2))*60)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,12,2)))+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVAHT,15,3))/1000)) AS numeric (32,8))*SUM(p1.C_REVCONT))
+					END
+				)
+			AS numeric (32,8)
+		)
+	AS STF_wAHT
+  ,
+	(
+		CASE
+			WHEN CONVERT(numeric (32,8),p1.C_REVSLGOAL) IS NULL
+				THEN 0
+				ELSE CONVERT(numeric (32,8),p1.C_REVSLGOAL)
+		END
+	)
+	AS STF_SVL
+  , CONVERT(numeric (32,8),
+	(
+		CASE
+			WHEN SUM(p1.C_REVCONT)= 0
+				THEN 0
+				ELSE (CONVERT(numeric (32,8),p1.C_REVSLGOAL) * SUM(p1.C_REVCONT))
+		END
+	)
+	)AS STF_wSVL
+  ,
+	(
+		CASE
+			WHEN p1.C_REVSLTIME IS NULL
+				THEN 0
+				ELSE CAST(CONVERT(numeric (32,8),(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,1,4))*86400)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,6,2))*3600)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,9,2))*60)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,12,2)))+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,15,3))/1000)) AS numeric (32,8))
+		END
+	)
+	AS STF_SVLTIME
+  , CAST
+		(
+				(
+					CASE
+						WHEN SUM(p1.C_REVCONT)= 0
+							THEN 0
+							ELSE (CAST(CONVERT(numeric (32,8),(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,1,4))*86400)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,6,2))*3600)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,9,2))*60)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,12,2)))+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVSLTIME,15,3))/1000)) AS numeric (32,8))*SUM(p1.C_REVCONT))
+					END
+				)
+			AS numeric (32,8)
+		)
+	AS STF_wSVLTIME
+  ,
+	(
+		CASE
+			WHEN SUM(p1.C_REVCONT)= 0
+				THEN 0
+				ELSE CAST(CONVERT(numeric (32,8),(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,1,4))*86400)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,6,2))*3600)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,9,2))*60)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,12,2)))+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,15,3))/1000)) AS numeric (32,8))
+		END
+	)
+	AS STF_ASA
+  , CAST
+		(
+				(
+					CASE
+						WHEN SUM(p1.C_REVCONT)= 0
+							THEN 0
+							ELSE (CAST(CONVERT(numeric (32,8),(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,1,4))*86400)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,6,2))*3600)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,9,2))*60)+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,12,2)))+(CONVERT(numeric (32,8),SUBSTRING(p1.C_REVASAGOAL,15,3))/1000)) AS numeric (32,8))*SUM(p1.C_REVCONT))
+					END
+				)
+			AS numeric (32,8)
+		)
+	AS STF_wASA
+  ,
+	(
+		CASE
+			WHEN CONVERT(numeric (32,8),p1.C_REVMAXOCCGOAL) IS NULL
+				THEN 0
+				ELSE CONVERT(numeric (32,8),p1.C_REVMAXOCCGOAL)
+		END
+	)
+	AS STF_OCC
+  ,
+	(
+		CASE
+			WHEN p1.C_REVMAXOCCGOAL IS NULL
+				THEN 0
+				ELSE CONVERT(numeric (32,8),
+				(
+					CASE
+						WHEN SUM(p1.C_REVCONT)= 0
+							THEN 0
+							ELSE (CONVERT(numeric (32,8),p1.C_REVMAXOCCGOAL) * SUM(p1.C_REVCONT))
+					END
+				)
+				)
+		END
+	)
+	AS STF_wOCC
+  , CAST
+		(
+				(
+					CASE
+						WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) IS NULL
+							THEN
+								(
+									CASE
+										WHEN CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ) IS NULL
+											THEN
+												(
+													CASE
+														WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) IS NULL
+															THEN 0
+															ELSE (CONVERT(numeric (32,8),p1.C_REVASAREQ) * CONVERT(numeric (32,8),p1.C_REVEFFASA))
+													END
+												)
+											ELSE
+												(
+													CASE
+														WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) > CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ)
+															THEN (CONVERT(numeric (32,8),p1.C_REVASAREQ)    * CONVERT(numeric (32,8),p1.C_REVEFFASA))
+															ELSE (CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ) * CONVERT(numeric (32,8),p1.C_REVEFFASA))
+													END
+												)
+									END
+								)
+							ELSE
+								(
+									CASE
+										WHEN CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ) IS NULL
+											THEN
+												(
+													CASE
+														WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) IS NULL
+															THEN (CONVERT(numeric (32,8),p1.C_REVSLREQ)*CONVERT(numeric (32,8),p1.C_REVEFFSL))
+															ELSE
+																(
+																	CASE
+																		WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) > CONVERT(numeric (32,8),p1.C_REVASAREQ)
+																			THEN (CONVERT(numeric (32,8),p1.C_REVSLREQ)  *CONVERT(numeric (32,8),p1.C_REVEFFSL))
+																			ELSE (CONVERT(numeric (32,8),p1.C_REVASAREQ) * CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																	END
+																)
+													END
+												)
+											ELSE
+												(
+													CASE
+														WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) IS NULL
+															THEN
+																(
+																	CASE
+																		WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) > CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ)
+																			THEN (CONVERT(numeric (32,8),p1.C_REVSLREQ)     *CONVERT(numeric (32,8),p1.C_REVEFFSL))
+																			ELSE (CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ) * CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																	END
+																)
+															ELSE
+																(
+																	CASE
+																		WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) > CONVERT(numeric (32,8),p1.C_REVASAREQ)
+																			THEN
+																				(
+																					CASE
+																						WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) > CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ)
+																							THEN (CONVERT(numeric (32,8),p1.C_REVSLREQ)     *CONVERT(numeric (32,8),p1.C_REVEFFSL))
+																							ELSE(CONVERT( numeric (32,8),p1.C_REVMAXOCCREQ) * CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																					END
+																				)
+																			ELSE
+																				(
+																					CASE
+																						WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) > CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ)
+																							THEN (CONVERT(numeric (32,8),p1.C_REVASAREQ)    * CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																							ELSE (CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ) * CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																					END
+																				)
+																	END
+																)
+													END
+												)
+									END
+								)
+					END
+				)
+			AS numeric (32,8)
+		)
+	AS STF_REQ
+  , CAST
+		(
+				(
+					CASE
+						WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) IS NULL
+							THEN
+								(
+									CASE
+										WHEN CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ) IS NULL
+											THEN
+												(
+													CASE
+														WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) IS NULL
+															THEN 0
+															ELSE (CONVERT(numeric (32,8),p1.C_REVEFFASA))
+													END
+												)
+											ELSE
+												(
+													CASE
+														WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) > CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ)
+															THEN (CONVERT(numeric (32,8),p1.C_REVEFFASA))
+															ELSE (CONVERT(numeric (32,8),p1.C_REVEFFASA))
+													END
+												)
+									END
+								)
+							ELSE
+								(
+									CASE
+										WHEN CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ) IS NULL
+											THEN
+												(
+													CASE
+														WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) IS NULL
+															THEN (CONVERT(numeric (32,8),p1.C_REVEFFSL))
+															ELSE
+																(
+																	CASE
+																		WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) > CONVERT(numeric (32,8),p1.C_REVASAREQ)
+																			THEN (CONVERT(numeric (32,8),p1.C_REVEFFSL))
+																			ELSE (CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																	END
+																)
+													END
+												)
+											ELSE
+												(
+													CASE
+														WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) IS NULL
+															THEN
+																(
+																	CASE
+																		WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) > CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ)
+																			THEN (CONVERT(numeric (32,8),p1.C_REVEFFSL))
+																			ELSE (CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																	END
+																)
+															ELSE
+																(
+																	CASE
+																		WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) > CONVERT(numeric (32,8),p1.C_REVASAREQ)
+																			THEN
+																				(
+																					CASE
+																						WHEN CONVERT(numeric (32,8),p1.C_REVSLREQ) > CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ)
+																							THEN (CONVERT(numeric (32,8),p1.C_REVEFFSL))
+																							ELSE(CONVERT( numeric (32,8),p1.C_REVEFFASA))
+																					END
+																				)
+																			ELSE
+																				(
+																					CASE
+																						WHEN CONVERT(numeric (32,8),p1.C_REVASAREQ) > CONVERT(numeric (32,8),p1.C_REVMAXOCCREQ)
+																							THEN (CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																							ELSE (CONVERT(numeric (32,8),p1.C_REVEFFASA))
+																					END
+																				)
+																	END
+																)
+													END
+												)
+									END
+								)
+					END
+				)
+			AS numeric (32,8)
+		)
+	AS STF_eff
+FROM
+	dbo.R_PLAN p1 with (NoLock)
+	INNER JOIN
+		dbo.R_ENTITY e4 with (NoLock)
+		ON
+			p1.C_CT = e4.C_OID
+WHERE
+	(
+		CAST(CONVERT(datetime,SWITCHOFFSET(CONVERT(datetimeoffset,p1.C_MOD),DATENAME(TzOffset, SYSDATETIMEOFFSET()))) AS datetime) > CONVERT(datetimeoffset,'2019-01-01')
+	)
+	AND
+	(
+		p1.C_FCST IN
+		(
+			SELECT DISTINCT
+				f1.C_OID
+			FROM
+				dbo.R_FCST f1 with (NoLock)
+			WHERE
+				(
+					(
+						f1.C_MOD LIKE '2019-%'
+					)
+					OR
+					(
+						f1.C_MOD LIKE '2020-%'
+					)
+				)
+				AND
+				(
+					CAST(CONVERT(datetime,SWITCHOFFSET(CONVERT(datetimeoffset,f1.C_GENTIME),DATENAME(TzOffset, SYSDATETIMEOFFSET()))) AS datetime) > CONVERT(datetimeoffset,'2019-01-01')
+				)
+		)
+	)
+	AND
+	(
+		CAST(CONVERT(datetime,SWITCHOFFSET(CONVERT(datetimeoffset,p1.C_FCSTPRD),DATENAME(TzOffset, SYSDATETIMEOFFSET()))) AS datetime) >= @DATEVAR_01
+	)
+	AND
+	(
+		CAST(CONVERT(datetime,SWITCHOFFSET(CONVERT(datetimeoffset,p1.C_FCSTPRD),DATENAME(TzOffset, SYSDATETIMEOFFSET()))) AS datetime) < @DATEVAR_03
+	)
+GROUP BY
+	p1.C_FCSTPRD
+  , e4.C_ID
+  , p1.C_REVAHT
+  , p1.C_REVSLGOAL
+  , p1.C_REVSLTIME
+  , p1.C_REVASAGOAL
+  , p1.C_REVMAXOCCGOAL
+  , p1.C_REVSLREQ
+  , p1.C_REVEFFSL
+  , p1.C_REVASAREQ
+  , p1.C_REVEFFASA
+  , p1.C_REVMAXOCCREQ
+ORDER BY
+	1
+  , 2
+  , 3

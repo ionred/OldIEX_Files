@@ -1,0 +1,170 @@
+declare @temptab TABLE
+   (
+      "C_BEGIN" NVARCHAR(40) NULL
+    , "C_END"   NVARCHAR(40) NULL
+    , "C_ISDST" NCHAR(1) NOT NULL
+    , "C_SECDIFF"  INT NOT NULL
+    , "C_TZ"       NVARCHAR(34) NOT NULL
+    , "C_TZOFFSET" NVARCHAR(6) NOT NULL
+   )
+
+
+insert into
+   @temptab
+select *
+from
+   r_tzinfo
+where
+   r_tzinfo.C_TZ = 'US/Central'
+   and C_BEGIN   > '1/1/2005'
+   and C_END     < '1/1/2025'
+
+DECLARE @ytd DATE =
+(
+   SELECT
+      DATEFROMPARTS(datepart (yy, GETUTCDATE()), 01, 01)
+)
+-- SELECT @ytd
+
+select
+   qstats.CTID
+ , qstats.CTNAME
+ , qstats.intervaldate
+ , qstats.ActualCalls
+ , qstats.HandledCalls
+ , qstats.AbandonedCalls
+ , qstats.TotalSecsToAns
+ , qstats.TalkTime
+ , qstats.WorkTime
+ , qstats.ReadyTime
+ , qstats.OccNum
+ , qstats.OccDen
+ , planstats.RevHandle
+ , planstats.ForeCont
+from
+   (
+      SELECT
+         a.CTID
+       , a.CTNAME
+       , intervaldate                                   As IntervalDate
+       , SUM(actual)                                    AS ActualCalls
+       , SUM(handled)                                   AS HandledCalls
+       , SUM(AbnCalls)                                  AS AbandonedCalls
+       , SUM(QueueDelaySec)                             AS TotalSecsToAns
+       , SUM(TalkTime)                                  AS TalkTime
+       , SUM(WorkTime)                                  AS WorkTime
+       , SUM(ReadyTime)                                 AS ReadyTime
+       , SUM(TalkTime) + SUM(WorkTime)                  AS OccNum
+       , SUM(TalkTime) + SUM(WorkTime) + SUM(ReadyTime) AS OccDen
+      FROM
+         (
+            SELECT
+               r_entity.C_ID   as CTID
+             , r_entity.C_NAME as CTNAME
+             , r_hierarchy.C_PARENT
+             , C_QUEUE
+             , CONVERT(DATE, dateadd(s, tzi.C_secdiff, C_TIMESTAMP)) AS intervaldate
+             , C_TIMESTAMP
+               --Actual Calls	
+             , r_queuestats.C_REVCONTRCVD AS ACTUAL
+               --Handled Calls	
+             ,(C_REVHNDLBEFSL+C_REVHNDLAFTSL) AS Handled
+               --Abandoned Calls
+             ,(C_REVABANDBEFSL + C_REVABANDAFTSL) AS AbnCalls
+               --QueueDelay in Sec	
+             ,(Cast((SUBSTRING(C_REVQUEUEDELAY,0,5) * 86400) + (SUBSTRING(C_REVQUEUEDELAY,6,2) * 3600) + (SUBSTRING(C_REVQUEUEDELAY,9,2) * 60) + (SUBSTRING(C_REVQUEUEDELAY,12,2)) As Numeric(15,2))) As QueueDelaySec
+               --TalkTime in Sec
+             ,((SUBSTRING(C_REVCONTTIME,0,5) * 86400) + (SUBSTRING(C_REVCONTTIME,6,2) * 3600) + (SUBSTRING(C_REVCONTTIME,9,2) * 60) + (SUBSTRING(C_REVCONTTIME,12,2))) As TalkTime
+               --WorkTime in Sec
+             ,((SUBSTRING(C_REVWORKTIME,0,5) * 86400) + (SUBSTRING(C_REVWORKTIME,6,2) * 3600) + (SUBSTRING(C_REVWORKTIME,9,2) * 60) + (SUBSTRING(C_REVWORKTIME,12,2))) As WorkTime
+               --ReadyTime in Sec
+             ,((SUBSTRING(C_REVREADYTIME,0,5) * 86400) + (SUBSTRING(C_REVREADYTIME,6,2) * 3600) + (SUBSTRING(C_REVREADYTIME,9,2) * 60) + (SUBSTRING(C_REVREADYTIME,12,2))) As ReadyTime
+               --Talk+Work
+             ,(Cast(((SUBSTRING(C_REVCONTTIME,0,5) * 86400) + (SUBSTRING(C_REVCONTTIME,6,2) * 3600) + (SUBSTRING(C_REVCONTTIME,9,2) * 60) + (SUBSTRING(C_REVCONTTIME,12,2))) + ((SUBSTRING(C_REVWORKTIME,0,5) * 86400) + (SUBSTRING(C_REVWORKTIME,6,2) * 3600) + (SUBSTRING(C_REVWORKTIME,9,2) * 60) + (SUBSTRING(C_REVWORKTIME,12,2))) As numeric(15,2))) As TalkWork
+               --Talk+Work+Ready
+             ,(Cast(((SUBSTRING(C_REVCONTTIME,0,5) * 86400) + (SUBSTRING(C_REVCONTTIME,6,2) * 3600) + (SUBSTRING(C_REVCONTTIME,9,2) * 60) + (SUBSTRING(C_REVCONTTIME,12,2))) + ((SUBSTRING(C_REVWORKTIME,0,5) * 86400) + (SUBSTRING(C_REVWORKTIME,6,2) * 3600) + (SUBSTRING(C_REVWORKTIME,9,2) * 60) + (SUBSTRING(C_REVWORKTIME,12,2))) + ((SUBSTRING(C_REVREADYTIME,0,5) * 86400) + (SUBSTRING(C_REVREADYTIME,6,2) * 3600) + (SUBSTRING(C_REVREADYTIME,9,2) * 60) + (SUBSTRING(C_REVREADYTIME,12,2))) As numeric(15,2))) AS TalkWorkReady
+            FROM
+               r_queuestats
+               LEFT JOIN
+                  @temptab tzi
+                  on
+                     r_queuestats.C_TIMESTAMP     > tzi.C_BEGIN
+                     and r_queuestats.C_TIMESTAMP < tzi.C_END
+               LEFT JOIN
+                  r_hierarchy
+                  on
+                     r_hierarchy.C_SDATE <= C_TIMESTAMP
+                     and
+                     (
+                        r_hierarchy.C_EDATE is null
+                        or r_hierarchy.C_EDATE   >= C_TIMESTAMP
+                     )
+                     and r_hierarchy.C_CHILD = r_queuestats.C_QUEUE
+               LEFT JOIN
+                  r_entity
+                  on
+                     r_entity.C_OID     = r_hierarchy.C_PARENT
+                     and r_entity.C_ACT = 'A'
+            WHERE
+               C_TIMESTAMP >= @ytd
+               AND r_entity.C_ID in  (42, 43 ) -- CT # goes here
+         )
+         a
+      WHERE
+         a.intervaldate >= @ytd
+      GROUP BY
+         a.CTID
+       , a.CTNAME
+       , intervaldate
+   )
+   as qstats
+   left join
+      (
+         SELECT
+            C_ID
+          , C_NAME
+          , intervaldate
+          , SUM(fullhandle) AS RevHandle
+          , SUM(contacts)   AS ForeCont
+            -- , SUM(RevAHT) AS ForeAHT
+         FROM
+            (
+               SELECT
+                  r_entity.C_ID
+                , r_entity.C_NAME
+                , cast(dateadd(s, tzi.C_SECDIFF, C_FCSTPRD) as date)                                                                                                                                                                                                   AS intervaldate
+                , cast((Cast((SUBSTRING(C_REVAHT,6,2) * 3600) + (SUBSTRING(C_REVAHT,9,2) * 60) + (SUBSTRING(C_REVAHT,12,2)) + (CAST(((CAST(SUBSTRING(C_REVAHT,15,4) As numeric(5,2))) /1000) As numeric(4,2))) As numeric(10,2))) * r_plan.C_REVCONT as decimal(18,2)) AS FullHandle
+                , r_plan.C_REVCONT                                                                                                                                                                                                                                     AS Contacts
+
+               FROM
+                  r_plan
+                  LEFT JOIN
+                     @temptab tzi
+                     on
+                        r_plan.C_FCSTPRD     > tzi.C_BEGIN
+                        and r_plan.C_FCSTPRD < tzi.C_END
+                  LEFT JOIN
+                     r_entity
+                     on
+                        r_entity.C_OID     = r_plan.C_CT
+                        and r_entity.C_ACT = 'A'
+               WHERE
+                  C_FCSTPRD     >= @ytd
+                  AND C_FCSTPRD <= CONVERT(DATE, dateadd(d, 1, GETDATE()))
+                              AND C_FCST  like 'fcst%'
+                  AND r_entity.C_ID in (18)
+            )
+            a
+         WHERE
+            a.intervaldate is not null
+            and a.intervaldate       < convert(date, getdate())
+         GROUP BY
+            C_ID
+          , C_NAME
+          , a.intervaldate
+      )
+      as planstats
+      on
+         qstats.CTID             = planstats.C_ID
+         and qstats.intervaldate = planstats.intervaldate
+ORDER BY CTID, intervaldate

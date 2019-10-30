@@ -1,0 +1,26 @@
+var nRequest = new Array();
+var i;
+links = document.getElementsByTagName('a');
+var j = 0;
+for (i = 0; i < links.length; i++) {
+    if (links[i].innerText === "release") {
+        {
+            (function(i) {
+                nRequest[i] = new XMLHttpRequest();
+                nRequest[i].open("POST", links[i].href, true);
+                nRequest[i].onreadystatechange = function(oEvent) {
+                    if (nRequest[i].readyState === 4) {
+                        if (nRequest[i].status === 200) {} else {
+                            console.log("Error", nRequest[i].statusText);
+                        }
+                    }
+                };
+                nRequest[i].send(null);
+            })(i);
+        }
+    }
+}
+Window.location.reload();
+do {}
+while (Document.readyState !== 'complete');
+j = j + 1; 

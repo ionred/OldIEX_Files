@@ -1,0 +1,635 @@
+declare @TargetDate datetime = Null
+declare @MUID int = Null
+declare @ScheduleTime datetime = Null
+declare @CacheResults bit = 0
+declare @Detail bit = 0
+declare @TTV_ID varchar(10) = null
+
+
+/**** Parameter Key
+
+TargetDate (Optional) - the date for which the adherence is reported. Defaults to the Yesterday if not supplied.
+MUID (Optional) - the integer number for a single MU to use. Defaults to a list which is front line agents in our environment
+ScheduleTime (Optional) - the date & time for which the view of the schedules should be taken (uses HIST tables to get old schedules from Audit trail). Defaults to current time, Live schedules. - haven't tested this to make sure it works anymore
+CacheResults (Optional) - either return the results directly, or store them in a table. N.B. this table only stores the current results - it is truncated every time the procedure runs. Default to directly return results (e.g. to an ODBC enabled application, such as Excel)
+TTV_ID (Optional) - limit the results to a single agent by providing their integer ID (r_agt.C_ID). Defaults to all agents in the relevant MUs.
+Detail (Optional) - Summary data for the day by default, if set to 1 then 
+*****/
+
+
+
+/********************************************************
+* Author: C Sharp
+* Created: 04/12/2013
+* Modified B Chaffin 2017/2018/2019
+*********************************************************/
+
+
+/*****************************
+
+Setup section, assigns default values to Variables, creates lists of agents & MUs
+Creates a selection of temporary tables to cache data in to improve performance
+
+**************/
+-- truncate table dbo.u_AdherenceDataCache
+/* Set this variable to an earlier period if necessary, defaults to 1 day ago */
+select @TargetDate = cast(dateadd(d, -1, getdate()) as date)
+
+/* Loops and runs for every day up through yesterday */
+while (@TargetDate <                 dateadd(d,0,cast(cast(getdate() as date)as datetime))) begin
+
+
+declare @MUIDs table (MUID int)
+declare @DLSOffset int --Daylight Savings patch
+/* Set TZ here as needed */
+select @DLSOffset = C_SECDIFF/60 from r_tzinfo where C_TZ = 'US/Central' and C_BEGIN <DATEADD(hh,3,@TargetDate) and C_END>DATEADD(hh,3,@TargetDate)
+if @MUID is null begin
+
+insert into @MUIDs
+SELECT r_entity.C_ID
+FROM r_mu INNER JOIN
+r_entity ON r_mu.C_OID = r_entity.C_OID
+where r_entity.C_ID  in (210, 211) and r_entity.C_ID < 9995 
+
+end
+else begin
+
+insert into @MUIDs (MUID) values (@MUID);
+
+End
+
+if object_ID('tempdb..#FutureImport_Temp1') is not null drop table #FutureImport_Temp1
+
+CREATE TABLE [dbo].[#FutureImport_Temp1](
+[PRI_INDEX] [int] identity(1,1) NOT NULL,
+[Payroll] int not null,
+[ExcName] [nvarchar](255) collate SQL_Latin1_General_CP850_BIN,
+[START_MOMENT] [datetime] NOT NULL,
+[STOP_MOMENT] [datetime] NOT NULL,
+[RANK] [int] NULL
+) ON [PRIMARY];
+
+if object_ID('tempdb..#FutureImport_Temp') is not null drop table #FutureImport_Temp
+
+CREATE TABLE [dbo].[#FutureImport_Temp](
+[PRI_INDEX] [int] NOT NULL,
+[Payroll] int not null,
+[ExcName] [nvarchar](255) collate SQL_Latin1_General_CP850_BIN,
+[START_MOMENT] [datetime] NOT NULL,
+[STOP_MOMENT] [datetime] NOT NULL,
+[RANK] [int] NULL
+) ON [PRIMARY];
+
+if object_ID('tempdb..#FutureImport_TempSuper') is not null drop table #FutureImport_TempSuper
+
+CREATE TABLE [dbo].[#FutureImport_TempSuper](
+[PRI_INDEX] [int] NOT NULL,
+[START_MOMENT] [datetime] NULL,
+[STOP_MOMENT] [datetime] NULL,
+[Super_Index] [int] NULL,
+[Super_EXC] [nvarchar](255) collate SQL_Latin1_General_CP850_BIN null,
+[Super_START] [datetime] NULL,
+[Super_STOP] [datetime] NULL,
+[Super_RANK] [int] NULL
+) ON [PRIMARY];
+
+if object_ID('tempdb..#FutureImport_Processed') is not null drop table #FutureImport_Processed
+
+create table #FutureImport_Processed ( 
+[PRI_INDEX] [int] NOT NULL,
+[Payroll] int not null,
+[ExcName] [nvarchar](255) collate SQL_Latin1_General_CP850_BIN null,
+[START_MOMENT] [datetime] NULL,
+[STOP_MOMENT] [datetime] NULL,
+[RANK] [int] NULL
+) ON [PRIMARY];
+
+if object_ID('tempdb..#AllStarts') is not null drop table #AllStarts
+
+create table #AllStarts ( Payroll int, StartTime datetime) on [PRIMARY]
+
+if object_ID('tempdb..#AllMoments') is not null drop table #AllMoments
+
+create table #AllMoments ( Payroll int, StartTime datetime, EndTime datetime) on [PRIMARY]
+
+if object_ID('tempdb..#Agents') is not null drop table #Agents
+
+
+create table #Agents (Payroll int, AgtName varchar(255) , MgrName varchar(255), MULink nvarchar(32) collate SQL_Latin1_General_CP850_BIN, AOID varchar(255) ) on [PRIMARY]
+
+if object_ID('tempdb..#Exclusions') is not null drop table #Exclusions
+
+create table #Exclusions (Payroll int, STime datetime, ETime datetime)
+
+/******************
+Create Agent list
+The assumption below is that your Agent Definition will have a 'Manager' field, and gets all the agents (or just the one in the TTV_ID variable if supplied) in the MUs required, with their Manager data.
+The bits showing 'replace(REPLACE(r_muroster.C_SDATE, '1113', '2013'),'1015','2015')' are hacked in because, in certain circumstances IEX would record dates with invalid years - 1113 instead of 2013 for example
+
+N.B. The agents' ID is referred to as Payroll.
+
+******************/
+-- Added AOID column to u_AdherenceDataCache, #Agents, #Results
+insert into #Agents (Payroll, AgtName, MgrName, MULink, AOID)
+SELECT V_AGENT.agent_, V_AGENT.name_, r_agtdataval.C_ALPHAVAL AS MgrName, r_muroster.C_MU MULink, V_AGENT.agentOid_
+FROM r_agtdata INNER JOIN
+r_agtdataval ON r_agtdata.C_AGTDATAVAL = r_agtdataval.C_OID INNER JOIN
+V_AGENT INNER JOIN
+r_muroster ON V_AGENT.agentOid_ = r_muroster.C_AGT INNER JOIN
+r_entity ON r_muroster.C_MU = r_entity.C_OID ON r_agtdata.C_AGT = V_AGENT.agentOid_ INNER JOIN
+r_agtdatadef ON r_agtdataval.C_AGTDATADEF = r_agtdatadef.C_OID AND r_agtdataval.C_AGTDATADEF = r_agtdatadef.C_OID AND 
+r_agtdataval.C_TYPE = r_agtdatadef.C_TYPE
+WHERE (r_muroster.C_ACT = 'A') AND (CONVERT(datetime, replace(REPLACE(r_muroster.C_SDATE, '1113', '2013'),'1015','2015'), 120) <= @TargetDate) AND (r_entity.C_ID in (select MUID from @MUIDs)) AND 
+(CONVERT(datetime, r_muroster.C_EDATE, 120) >= @TargetDate or r_muroster.C_EDATE is null) AND (r_agtdatadef.C_DESCR = 'MANAGER')
+AND (CONVERT(datetime, replace(REPLACE(r_agtdata.C_SDATE, '1113', '2013'),'1015','2015'), 120) <= @TargetDate) AND 
+(CONVERT(datetime, r_agtdata.C_EDATE, 120) >= @TargetDate or r_agtdata.C_EDATE is null) and v_agent.agent_ like isnull(@TTV_ID, '%') 
+
+
+/*************
+
+Fetch MU exclusions
+
+*************/
+
+insert into #Exclusions (Payroll, STime, ETime)
+SELECT Payroll, cast( C_STIME as datetime) STime, cast(C_ETIME as datetime) ETime
+FROM #Agents t1 inner join r_muadhexclusions on t1.MULink = r_muadhexclusions.C_MU collate SQL_Latin1_General_CP1_CI_AS INNER JOIN
+r_muadhexclusionsintvls ON r_muadhexclusions.C_OID = r_muadhexclusionsintvls.C_MUADHEXCLUSIONS
+WHERE (cast(r_muadhexclusions.C_DATE as datetime) =@TargetDate)
+
+/**** for efficiency, if ScheduleTime is not supplied, only query Active schedule tables. ****/
+if @ScheduleTime is null begin
+
+insert into #FutureImport_Temp1 (Payroll, ExcName, START_MOMENT, STOP_MOMENT, [Rank])
+SELECT V_AGENT.agent_, r_excp.C_OID, cast(r_agtschedact.C_STIME as datetime) S_TIME, cast(r_agtschedact.C_ETIME as datetime) E_TIME, 1 AS ExcRank
+FROM V_AGENT INNER JOIN
+r_agtschedact ON V_AGENT.agentOid_ = r_agtschedact.C_AGT INNER JOIN
+r_excp ON r_agtschedact.C_EXCP = r_excp.C_OID
+WHERE r_agtschedact.C_DATE = @TargetDate AND 
+(V_AGENT.agent_ IN (SELECT Payroll from #Agents))
+
+insert into #FutureImport_Temp1 (Payroll, ExcName, START_MOMENT, STOP_MOMENT, [Rank])
+SELECT V_AGENT.agent_, r_excp.C_OID, cast(r_agtscheddtlact.C_STIME as datetime) S_TIME, cast(r_agtscheddtlact.C_ETIME as datetime) E_TIME, 0 ExcRank
+FROM r_agtschedact INNER JOIN
+r_agtscheddtlact ON r_agtschedact.C_OID = r_agtscheddtlact.C_AGTSCHED INNER JOIN
+V_AGENT ON r_agtschedact.C_AGT = V_AGENT.agentOid_ INNER JOIN
+r_excp ON r_agtscheddtlact.C_EXCP = r_excp.C_OID
+WHERE r_agtschedact.C_DATE = @TargetDate AND (V_AGENT.agent_ IN
+(SELECT Payroll from #Agents))
+end
+else begin /*** Otherwise, union active and history tables query to obtain schedules as at a particular moment ****/
+
+--Adjust schedule for proper TZ & Daylight Savings time
+select @ScheduleTime = DATEADD(s,C_SECDIFF, @ScheduleTime) from r_tzinfo
+where C_TZ = 'US/Central' and C_BEGIN<=@ScheduleTime and C_END>@ScheduleTime
+
+insert into #FutureImport_Temp1 (Payroll, ExcName, START_MOMENT, STOP_MOMENT, [Rank])
+SELECT V_AGENT.agent_, r_excp.C_OID, cast(r_agtschedact.C_STIME as datetime) S_TIME, cast(r_agtschedact.C_ETIME as datetime) E_TIME, 1 AS ExcRank
+FROM V_AGENT INNER JOIN
+r_agtschedact ON V_AGENT.agentOid_ = r_agtschedact.C_AGT INNER JOIN
+r_excp ON r_agtschedact.C_EXCP = r_excp.C_OID
+WHERE (cast(r_agtschedact.C_DATE as DATE) >= @TargetDate) AND (V_AGENT.agent_ IN
+(SELECT Payroll from #Agents)) and (r_agtschedact.C_CTIME<@ScheduleTime)
+union
+SELECT V_AGENT.agent_, r_excp.C_OID, cast(r_agtschedhist.C_STIME as datetime) S_TIME, cast(r_agtschedhist.C_ETIME as datetime) E_TIME, 1 AS ExcRank
+FROM V_AGENT INNER JOIN
+r_agtschedhist ON V_AGENT.agentOid_ = r_agtschedhist.C_AGT INNER JOIN
+r_excp ON r_agtschedhist.C_EXCP = r_excp.C_OID
+WHERE (cast(r_agtschedhist.C_DATE as DATE) >= @TargetDate) AND (V_AGENT.agent_ IN
+(SELECT Payroll from #Agents)) and (r_agtschedhist.C_CTIME<=@ScheduleTime and r_agtschedhist.C_MOD>@ScheduleTime)
+
+insert into #FutureImport_Temp1 (Payroll, ExcName, START_MOMENT, STOP_MOMENT, [Rank])
+SELECT V_AGENT.agent_, r_excp.C_OID, cast(r_agtscheddtlact.C_STIME as datetime) S_TIME, cast(r_agtscheddtlact.C_ETIME as datetime) E_TIME, 0 ExcRank
+FROM r_agtschedact INNER JOIN
+r_agtscheddtlact ON r_agtschedact.C_OID = r_agtscheddtlact.C_AGTSCHED INNER JOIN
+V_AGENT ON r_agtschedact.C_AGT = V_AGENT.agentOid_ INNER JOIN
+r_excp ON r_agtscheddtlact.C_EXCP = r_excp.C_OID
+WHERE (r_agtschedact.C_DATE = @TargetDate) AND (V_AGENT.agent_ IN
+(SELECT Payroll from #Agents)) and (r_agtschedact.C_CTIME<@ScheduleTime)
+union 
+SELECT V_AGENT.agent_, r_excp.C_OID, cast(r_agtscheddtlhist.C_STIME as datetime) S_TIME, cast(r_agtscheddtlhist.C_ETIME as datetime) E_TIME, 0 ExcRank
+FROM r_agtschedhist INNER JOIN
+r_agtscheddtlhist ON r_agtschedhist.C_OID = r_agtscheddtlhist.C_AGTSCHED INNER JOIN
+V_AGENT ON r_agtschedhist.C_AGT = V_AGENT.agentOid_ INNER JOIN
+r_excp ON r_agtscheddtlhist.C_EXCP = r_excp.C_OID
+WHERE (r_agtschedhist.C_DATE = @TargetDate) AND (V_AGENT.agent_ IN
+(SELECT Payroll from #Agents)) and (r_agtschedhist.C_CTIME<@ScheduleTime and r_agtschedhist.C_MOD>@ScheduleTime)
+end 
+
+
+/********
+Schedule extract section
+This bit of code turns the Schedule and ScheduleDetail tables into a single recordset, flattening out the view of Base code and Activity code.
+
+********/
+
+Insert into #FutureImport_Temp
+select * from #FutureImport_Temp1
+
+WHILE (SELECT COUNT(*) FROM #FutureImport_Temp) > 0
+BEGIN
+
+
+INSERT INTO
+#FutureImport_TempSuper(PRI_INDEX, START_MOMENT, STOP_MOMENT, Super_Index, Super_EXC, Super_START, Super_STOP, Super_RANK)
+SELECT
+#FutureImport_Temp.PRI_INDEX,
+#FutureImport_Temp.START_MOMENT,
+#FutureImport_Temp.STOP_MOMENT,
+FIT_super.PRI_INDEX as Super_Index,
+FIT_super.ExcName as Super_EXC,
+FIT_super.START_MOMENT as Super_START,
+FIT_super.STOP_MOMENT as Super_STOP,
+FIT_super.RANK as Super_RANK
+FROM
+#FutureImport_Temp
+INNER JOIN
+#FutureImport_Temp as FIT_super
+ON
+#FutureImport_Temp.Payroll = FIT_super.Payroll
+AND
+#FutureImport_Temp.RANK > FIT_super.RANK
+AND
+((#FutureImport_Temp.START_MOMENT <= FIT_super.START_MOMENT
+AND 
+#FutureImport_Temp.STOP_MOMENT > FIT_super.START_MOMENT)
+OR
+(#FutureImport_Temp.START_MOMENT < FIT_super.STOP_MOMENT
+AND 
+#FutureImport_Temp.STOP_MOMENT >= FIT_super.STOP_MOMENT)
+OR
+(#FutureImport_Temp.START_MOMENT < FIT_super.STOP_MOMENT
+AND
+#FutureImport_Temp.STOP_MOMENT > FIT_super.START_MOMENT))
+
+INSERT INTO
+#FutureImport_Processed(PRI_INDEX, Payroll , ExcName, START_MOMENT, STOP_MOMENT, RANK)
+SELECT
+NewProcessed.PRI_INDEX,
+NewProcessed.payroll,
+NewProcessed.ExcName,
+NewProcessed.START_MOMENT,
+NewProcessed.STOP_MOMENT,
+NewProcessed.RANK
+FROM
+(SELECT DISTINCT
+#FutureImport_Temp.PRI_INDEX,
+#FutureImport_Temp.Payroll,
+#FutureImport_Temp.ExcName,
+#FutureImport_Temp.START_MOMENT,
+#FutureImport_Temp.STOP_MOMENT,
+#FutureImport_Temp.RANK
+FROM
+#FutureImport_Temp
+LEFT OUTER JOIN
+(SELECT
+(CASE WHEN State.id = 1 THEN PRI_INDEX ELSE Super_Index END) as prix,
+(CASE WHEN State.id = 1 THEN START_MOMENT ELSE Super_Start END) as start,
+(CASE WHEN State.id = 1 THEN STOP_MOMENT ELSE Super_Stop END) as stop
+FROM
+#FutureImport_TempSuper
+CROSS JOIN
+((SELECT 1 as id) UNION (SELECT 2)) as State
+GROUP BY
+(CASE WHEN State.id = 1 THEN PRI_INDEX ELSE Super_Index END),
+(CASE WHEN State.id = 1 THEN START_MOMENT ELSE Super_Start END),
+(CASE WHEN State.id = 1 THEN STOP_MOMENT ELSE Super_Stop END)) as ASAC
+ON
+#FutureImport_Temp.PRI_INDEX = ASAC.prix
+AND
+#FutureImport_Temp.START_MOMENT = ASAC.start
+AND
+#FutureImport_Temp.STOP_MOMENT = ASAC.stop
+WHERE
+ASAC.prix IS NULL
+) as NewProcessed
+LEFT OUTER JOIN
+#FutureImport_Processed
+ON
+NewProcessed.PRI_INDEX = #FutureImport_Processed.PRI_INDEX
+AND
+NewProcessed.Payroll = #FutureImport_Processed.Payroll
+AND
+NewProcessed.ExcName = #FutureImport_Processed.ExcName
+AND
+NewProcessed.START_MOMENT = #FutureImport_Processed.START_MOMENT
+AND
+NewProcessed.STOP_MOMENT = #FutureImport_Processed.STOP_MOMENT
+AND
+NewProcessed.RANK = #FutureImport_Processed.RANK
+WHERE
+#FutureImport_Processed.PRI_INDEX IS NULL 
+
+DELETE
+#FutureImport_Temp
+FROM
+#FutureImport_Temp
+LEFT OUTER JOIN
+(SELECT
+(CASE WHEN State.id = 1 THEN PRI_INDEX ELSE Super_Index END) as prix,
+(CASE WHEN State.id = 1 THEN START_MOMENT ELSE Super_Start END) as start,
+(CASE WHEN State.id = 1 THEN STOP_MOMENT ELSE Super_Stop END) as stop
+FROM
+#FutureImport_TempSuper
+CROSS JOIN
+((SELECT 1 as id) UNION (SELECT 2)) as State
+GROUP BY
+(CASE WHEN State.id = 1 THEN PRI_INDEX ELSE Super_Index END),
+(CASE WHEN State.id = 1 THEN START_MOMENT ELSE Super_Start END),
+(CASE WHEN State.id = 1 THEN STOP_MOMENT ELSE Super_Stop END)) as ASAC
+ON
+#FutureImport_Temp.PRI_INDEX = ASAC.prix
+AND
+#FutureImport_Temp.START_MOMENT = ASAC.start
+AND
+#FutureImport_Temp.STOP_MOMENT = ASAC.stop
+WHERE
+ASAC.prix IS NULL
+
+DELETE
+#FutureImport_Temp
+FROM
+#FutureImport_Temp
+INNER JOIN
+#FutureImport_TempSuper
+ON
+#FutureImport_Temp.PRI_INDEX = #FutureImport_TempSuper.PRI_INDEX
+AND
+#FutureImport_Temp.START_MOMENT = #FutureImport_TempSuper.START_MOMENT
+AND
+#FutureImport_Temp.STOP_MOMENT = #FutureImport_TempSuper.STOP_MOMENT
+WHERE
+#FutureImport_TempSuper.Super_STOP >= #FutureImport_Temp.STOP_MOMENT
+AND
+#FutureImport_TempSuper.Super_START <= #FutureImport_Temp.START_MOMENT
+
+INSERT INTO
+#FutureImport_Temp(PRI_INDEX, Payroll, ExcName, START_MOMENT, STOP_MOMENT, RANK)
+SELECT DISTINCT
+#FutureImport_Temp.PRI_INDEX,
+#FutureImport_Temp.Payroll,
+#FutureImport_Temp.ExcName,
+#FutureImport_TempSuper.Super_STOP,
+#FutureImport_Temp.STOP_MOMENT,
+#FutureImport_Temp.RANK
+FROM
+#FutureImport_Temp
+INNER JOIN
+#FutureImport_TempSuper
+ON
+#FutureImport_Temp.PRI_INDEX = #FutureImport_TempSuper.PRI_INDEX
+AND
+#FutureImport_Temp.START_MOMENT = #FutureImport_TempSuper.START_MOMENT
+AND
+#FutureImport_Temp.STOP_MOMENT = #FutureImport_TempSuper.STOP_MOMENT
+WHERE
+#FutureImport_TempSuper.Super_STOP < #FutureImport_Temp.STOP_MOMENT
+AND
+#FutureImport_TempSuper.Super_START > #FutureImport_Temp.START_MOMENT
+
+UPDATE
+#FutureImport_Temp
+SET
+#FutureImport_Temp.START_MOMENT = (CASE WHEN #FutureImport_TempSuper.Super_STOP < #FutureImport_Temp.STOP_MOMENT AND #FutureImport_TempSuper.Super_STOP > #FutureImport_Temp.START_MOMENT AND #FutureImport_TempSuper.Super_START <= #FutureImport_Temp.START_MOMENT THEN #FutureImport_TempSuper.Super_STOP ELSE #FutureImport_Temp.START_MOMENT END),
+#FutureImport_Temp.STOP_MOMENT = (CASE WHEN #FutureImport_TempSuper.Super_START > #FutureImport_Temp.START_MOMENT AND #FutureImport_TempSuper.Super_START < #FutureImport_Temp.STOP_MOMENT THEN #FutureImport_TempSuper.Super_START ELSE #FutureImport_Temp.STOP_MOMENT END)
+FROM
+#FutureImport_Temp
+INNER JOIN
+#FutureImport_TempSuper
+ON
+#FutureImport_Temp.PRI_INDEX = #FutureImport_TempSuper.PRI_INDEX
+AND
+#FutureImport_Temp.START_MOMENT = #FutureImport_TempSuper.START_MOMENT
+AND
+#FutureImport_Temp.STOP_MOMENT = #FutureImport_TempSuper.STOP_MOMENT
+WHERE
+(#FutureImport_TempSuper.Super_STOP < #FutureImport_Temp.STOP_MOMENT AND #FutureImport_TempSuper.Super_STOP > #FutureImport_Temp.START_MOMENT AND #FutureImport_TempSuper.Super_START <= #FutureImport_Temp.START_MOMENT)
+OR
+(#FutureImport_TempSuper.Super_START > #FutureImport_Temp.START_MOMENT AND #FutureImport_TempSuper.Super_START < #FutureImport_Temp.STOP_MOMENT)
+
+DELETE FROM #FutureImport_Temp WHERE START_MOMENT = STOP_MOMENT
+TRUNCATE TABLE #FutureImport_TempSuper
+END
+
+
+DROP TABLE [#FutureImport_Temp]
+DROP TABLE [#FutureImport_Temp1]
+DROP TABLE [#FutureImport_TempSuper]
+
+
+/**********************
+
+Compile Agent Activity data into temporary table to be joined to schedule data
+
+***********************/
+
+if object_ID('tempdb..#Acts') is not null drop table #Acts
+
+create table #Acts (agent_ int, 
+ActvName nvarchar(255) collate SQL_Latin1_General_CP850_BIN null, 
+ActAdh nvarchar(255) collate SQL_Latin1_General_CP850_BIN null, 
+AcStart datetime,
+AcEnd Datetime
+)
+
+insert into #Acts
+SELECT V_AGENT.agent_, t3.C_Name ActvName, t3.AdhTo ActAdh, cast(r_activitylogdtl.C_STIME as datetime) AcStart, cast(r_activitylogdtl.C_ETIME as datetime) AcEnd
+FROM r_agtacdlogon INNER JOIN
+r_activitylogdtl ON r_agtacdlogon.C_OID = r_activitylogdtl.C_AGTACDLOGON INNER JOIN
+V_AGENT ON r_agtacdlogon.C_AGT = V_AGENT.agentOid_ INNER JOIN
+(select r_excp.c_oid, r_excp.C_Name, isnull(s1.adhTo, r_excp.C_NAME) AdhTo 
+from r_excp left join (SELECT r_excpattrvalassgn.C_EXCP, r_excpattrval.C_ALPHAVAL AS AdhTo
+FROM r_excpattrvalassgn INNER JOIN
+r_excpattrval ON r_excpattrvalassgn.C_EXCPATTRVAL = r_excpattrval.C_OID INNER JOIN
+r_excpattrdef ON r_excpattrval.C_EXCPATTRDEF = r_excpattrdef.C_OID AND r_excpattrval.C_EXCPATTRDEF = r_excpattrdef.C_OID AND 
+r_excpattrval.C_TYPE = r_excpattrdef.C_TYPE
+WHERE (r_excpattrdef.C_DESCR = N'Adherence')) s1 on r_excp.C_OID = s1.C_EXCP) t3 ON r_activitylogdtl.C_EXCP = t3.C_OID
+WHERE (cast( r_activitylogdtl.C_STIME as datetime) BETWEEN @TargetDate AND dateadd(mi, -@DLSOffset, dateadd(d,2,@TargetDate)))
+and (V_AGENT.agent_ in (SELECT Payroll from #Agents))
+
+/***************
+
+This next section gets all the start/end timestamps from the exceptions, schedules and actuals to produce a 'spine' of event times onto which I hang both the schedule and actual data in order to get a distinct set of schedule/actual pairs
+
+***************/
+
+insert into #AllStarts (Payroll, StartTime)
+select Payroll, START_MOMENT
+from #FutureImport_Processed
+
+insert into #AllStarts (Payroll, StartTime)
+select Payroll, STOP_MOMENT
+from #FutureImport_Processed
+
+insert into #AllStarts (Payroll, StartTime)
+select agent_, AcStart
+from #Acts t1
+
+insert into #AllStarts (Payroll, StartTime)
+select agent_, AcEnd
+from #Acts t1
+
+insert into #AllStarts (Payroll, StartTime)
+SELECT Payroll, STime
+FROM #Exclusions
+
+insert into #AllStarts (Payroll, StartTime)
+SELECT Payroll, ETime
+FROM #Exclusions
+
+
+/*********************
+
+From the list of distinct event timestamps for each agent fetch the event timestamp, and the next event timestamp for that agent.
+Creates a table of Start/End event times for each agent
+
+********************/
+
+insert into #AllMoments
+select distinct Payroll, StartTime, 
+(select top 1 StartTime 
+from #AllStarts t1 
+where t1.Payroll = t0.Payroll and t1.StartTime>t0.StartTime 
+order by t1.StartTime asc) NextStart 
+from #AllStarts t0
+order by Payroll , StartTime
+
+delete from #AllMoments where EndTime is null
+
+if object_ID('tempdb..#Results') is not null drop table #Results
+
+create table #Results
+(
+Payroll int,
+AgtName nvarchar(255),
+MgrName nvarchar(255),
+MUID int,
+MUName nvarchar(255),
+StartTime datetime,
+EndTime datetime,
+Schedule nvarchar(255) collate SQL_Latin1_General_CP850_BIN,
+AdhTo nvarchar(255) collate SQL_Latin1_General_CP850_BIN,
+Activity nvarchar(255) collate SQL_Latin1_General_CP850_BIN,
+ActAdh nvarchar(255) collate SQL_Latin1_General_CP850_BIN,
+InAdherence nvarchar(10),
+Exclusion nvarchar(50),
+Mins int,
+SchedExImport nvarchar(255) collate SQL_Latin1_General_CP850_BIN,
+AdhDate datetime NULL,
+-- Added AOID column to u_AdherenceDataCache, #Agents, #Results
+AOID nvarchar(255)
+)
+
+insert into #Results
+select 
+t0.Payroll, 
+t4.AgtName, 
+t4.MgrName, 
+t6.C_ID MUID, 
+t6.C_NAME MUNAME, 
+t0.StartTime, 
+t0.EndTime, 
+isnull(t3.C_NAME, 'Unscheduled') Schedule, 
+isnull(t3.AdhTo, 'Unscheduled') AdhTo, 
+Isnull(t2.ActvName, 'Logged Off') Activity, 
+isnull(t2.ActAdh,'No Activity') ActAdh,
+case when isnull (t3.AdhTo, 'Ignore') ='Ignore' then 'Ignore' when isnull (t3.AdhTo, 'Unscheduled') = 'Unscheduled' then 'Ignore' when lower(t3.AdhTo) = lower(isnull(t2.ActAdh,'No Activity')) then 'Y' else 'N' end InAdherence, 
+case when t5.Payroll is not null then 'Excluded' else 'Included' end Exclusion, 
+DATEDIFF(MI, t0.StartTime,t0.EndTime) Mins, 
+t3.SchedExImport,
+@TargetDate,
+t4.AOID
+-- Added AOID column to u_AdherenceDataCache, #Agents, #Results
+from #AllMoments t0 left join #FutureImport_Processed t1 on t0.Payroll = t1.Payroll and ((t0.StartTime>=t1.START_MOMENT and t0.StartTime <t1.STOP_MOMENT) or (t0.StartTime is not null and t1.START_MOMENT is null) )
+left join #Exclusions t5 on t0.Payroll = t5.Payroll and t0.StartTime >= t5.Stime and t0.StartTime <t5.ETime
+left join #Acts t2 on t0.Payroll = t2.agent_ and t0.StartTime >=t2.AcStart and t0.StartTime<t2.AcEnd
+left join (select r_excp.c_oid, r_excp.C_Name, isnull(s1.adhTo,'Ignore') AdhTo, case when AEOverWrite is not null then SchedExImport else null end SchedExImport
+from r_excp left join (SELECT r_excpattrvalassgn.C_EXCP, max(case when r_excpattrdef.C_DESCR='AdminEmailOverwrite' then r_excpattrval.C_ALPHAVAL else null end) AS AEOverWrite, max(case when r_excpattrdef.C_DESCR='SchedExImport' then r_excpattrval.C_ALPHAVAL else null end) as SchedExImport, max(case when r_excpattrdef.C_DESCR='Adherence' then r_excpattrval.C_ALPHAVAL else null end) as AdhTo
+FROM r_excpattrvalassgn INNER JOIN
+r_excpattrval ON r_excpattrvalassgn.C_EXCPATTRVAL = r_excpattrval.C_OID INNER JOIN
+r_excpattrdef ON r_excpattrval.C_EXCPATTRDEF = r_excpattrdef.C_OID AND r_excpattrval.C_EXCPATTRDEF = r_excpattrdef.C_OID AND 
+r_excpattrval.C_TYPE = r_excpattrdef.C_TYPE
+WHERE (r_excpattrdef.C_DESCR in (N'AdminEmailOverwrite',N'SchedExImport', N'Adherence'))
+group by C_EXCP) s1 on r_excp.C_OID = s1.C_EXCP) t3 on t1.ExcName = t3.C_OID
+inner join #Agents t4 on t0.Payroll = t4.Payroll inner join r_entity t6 on t4.MULink  COLLATE DATABASE_DEFAULT = t6.C_OID COLLATE DATABASE_DEFAULT
+order by t0.Payroll, t0.StartTime
+
+/*****************
+
+Having created the result set above - the times are adjusted for DayLight Savings, as I didn't realise the times in IEX were not adjusted when I first wrote this.
+
+
+****************/
+
+
+select @DLSOffset = C_SECDIFF/60 from r_tzinfo where C_TZ = 'US/Central' and C_BEGIN <DATEADD(hh,3,@TargetDate) and C_END>DATEADD(hh,3,@TargetDate)
+
+update #Results
+set StartTime = DATEADD(mi,@DLSOffset,StartTime), EndTime = DATEADD(mi,@DLSOffset,EndTime)
+
+/* Also adjust Agent Activity data for BST, as may be used later for Breaks Write back */
+
+update #Acts
+set AcStart = dateadd(mi,@DLSOffset, AcStart), AcEnd = Dateadd(mi,@DLSOffset, AcEnd)
+
+update #FutureImport_Processed
+set Start_Moment = dateadd(mi,@DLSOffset, Start_Moment), STOP_MOMENT = dateadd(mi,@DLSOffset,STOP_MOMENT)
+
+if @CacheResults = 0 begin
+
+	if @Detail = 1 begin
+	Select 
+		CONVERT(Date, AdhDate) As Adh_Date, t1.MUID As MU_ID, t1.MUName As MU_Name, t1.MgrName As MGR, t1.Payroll As TTV_ID, 
+		t1.AgtName As Agt_Name,  t1.Schedule As Schedule, t1.AdhTo As Adh_To, t1.Activity As Activity, t1.ActAdh As Act_Adh,
+		t1.InAdherence As In_Adh, t1.Exclusion As Exclude,
+		t1.Mins As Total_Minutes,
+		(CASE When t1.InAdherence = 'Y' Then t1.Mins Else 0 End) As InAdh_Mins,
+		(CASE When t1.InAdherence = 'N' Then t1.Mins Else 0 End) As OutAdh_Mins, t1.AOID
+		From #Results t1 where t1.InAdherence <> 'Ignore'
+	end
+else begin 
+
+Select 
+a.Adh_Date, a.MU_ID, a.MU_Name, a.MGR, a.TTV_ID, V_AGTACDS.logon_ as ACD_ID, a.Agt_Name, a.Exclude, sum(Total_Minutes) As Ttl_Mins,
+sum(InAdh_Mins) As In_Adh_Mins,
+sum(OutAdh_Mins) As Out_Adh_Mins
+
+From(
+Select 
+CONVERT(Date, AdhDate) As Adh_Date, t1.MUID As MU_ID, t1.MUName As MU_Name, t1.MgrName As MGR, t1.Payroll As TTV_ID, 
+t1.AgtName As Agt_Name,  t1.Schedule As Schedule, t1.AdhTo As Adh_To, t1.Activity As Activity, t1.ActAdh As Act_Adh,
+t1.InAdherence As In_Adh, t1.Exclusion As Exclude,
+t1.Mins As Total_Minutes,
+(CASE When t1.InAdherence = 'Y' Then t1.Mins Else 0 End) As InAdh_Mins,
+(CASE When t1.InAdherence = 'N' Then t1.Mins Else 0 End) As OutAdh_Mins, t1.AOID
+From #Results t1 where t1.InAdherence <> 'Ignore'
+
+)a
+
+left join V_AGTACDS on V_AGTACDS.agtOid_ COLLATE DATABASE_DEFAULT = a.AOID COLLATE DATABASE_DEFAULT and V_AGTACDS.sdate_ <= a.Adh_Date and (V_AGTACDS.edate_ is null or V_AGTACDS.edate_ > a.Adh_Date)
+where a.Exclude = 'Included'
+Group By a.Adh_Date, a.MU_ID, a.MU_Name, a.MGR, a.TTV_ID, a.Agt_Name, a.Exclude, V_AGTACDS.logon_ 
+
+end
+
+
+end
+else begin
+truncate table dbo.u_AdherenceDataCache
+
+
+-- Added AOID column to u_AdherenceDataCache, #Agents, #Results
+insert into dbo.u_AdherenceDataCache (Payroll, AgtName, MgrName, MUID, MUName, StartTime, EndTime, Schedule, AdhTo, Activity, ActAdh, InAdherence, Exclusion, Mins, LunchOffPhone, AEOverWrite, AdhDate, AOID)
+select Payroll, AgtName, MgrName, t1.MUID, t1.MUName, StartTime, EndTime, Schedule, AdhTo, Activity, ActAdh, InAdherence, Exclusion, Mins, 'N/A' as LunchOffPhone, t1.SchedExImport, AdhDate, AOID from #Results t1 where t1.InAdherence <> 'Ignore' 
+
+
+end
+
+drop table #FutureImport_Processed
+drop table #Acts
+drop table #AllStarts
+drop table #AllMoments
+drop table #Agents
+drop table #Exclusions
+select @TargetDate = dateadd(d,1,@TargetDate)
+end
